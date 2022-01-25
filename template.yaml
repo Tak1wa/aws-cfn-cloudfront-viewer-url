@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: --------
+Resources:
+  ##########################################
+  # OAI
+  ##########################################
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub ${AWS::StackName}-oai
+
+  ##########################################
+  # S3 Origin Bucket
+  ##########################################
+  OriginBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-originbucket-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+  AssetsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref OriginBucket
+      PolicyDocument:
+        Statement:
+          - Action: 
+              - s3:GetObject
+            Effect: Allow
+            Resource: 
+              - !Sub arn:aws:s3:::${OriginBucket}/*
+            Principal:
+              AWS: !Sub arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginAccessIdentity}
+
+  ##########################################
+  # CloudFront Functions
+  ##########################################
+  ModifyRequestUrlFunction:
+    Type: AWS::CloudFront::Function
+    Properties: 
+      Name: modify-request-url-cf2
+      AutoPublish: true
+      FunctionConfig:
+        Comment: https://docs.aws.amazon.com/ja_jp/AmazonCloudFront/latest/DeveloperGuide/example-function-add-index.html
+        Runtime: cloudfront-js-1.0
+      FunctionCode: |
+        function handler(event) {
+            var request = event.request;
+            var uri = request.uri;
+            // Check whether the URI is missing a file name.
+            if (uri.endsWith('/')) {
+                request.uri += 'index.html';
+            }
+            // Check whether the URI is missing a file extension.
+            else if (!uri.includes('.')) {
+                request.uri += '/index.html';
+            }
+            return request;
+        }
+
+  ##########################################
+  # CloudFront
+  ##########################################
+  AssetsDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        PriceClass: PriceClass_All
+        Origins:
+        - Id: !Sub ${AWS::StackName}-origin-primary
+          DomainName: !GetAtt OriginBucket.RegionalDomainName
+          S3OriginConfig:
+            OriginAccessIdentity: !Sub origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}
+        Enabled: true
+        DefaultRootObject: index.html
+        DefaultCacheBehavior:
+          TargetOriginId: !Sub ${AWS::Stac1Name}-origin-primary
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          DefaultTTL: 60
+          MaxTTL: 60
+          MinTTL: 0
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt ModifyRequestUrlFunction.FunctionMetadata.FunctionARN
+        HttpVersion: http2
+
+Outputs:
+  OriginBucket:
+    Value: !Ref OriginBucket
+  AssetsDistribution:
+    Value: !GetAtt AssetsDistribution.DomainName
